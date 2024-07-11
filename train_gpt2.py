@@ -1,4 +1,5 @@
 import math
+import time
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
@@ -228,22 +229,32 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
-train_loader = DataLoaderLite(B=4, T=32)
+train_loader = DataLoaderLite(B=16, T=1024)
+
+# torch.set_float32_matmul_precision('high') # Radeon Pro W7900 doesn't support TF32
 
 #get logits
 model = GPT(GPTConfig())
 model.to(device)
+model = torch.compile(model)
 
 # optimize!
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4) # 3e-4 is a good learning rate to start off with
 for i in range(50):
+    t0 = time.time()
     x,y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        logits, loss = model(x, y)
+        # import code; code.interact(local=locals()) # add code breakpoint to confirm dtype
     loss.backward()
     optimizer.step()
-    print(f"step: {i} loss: {loss.item()}")
+    torch.cuda.synchronize()
+    t1 = time.time()
+    dt = (t1-t0)*1000 # time difference in miliseconds
+    tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
+    print(f"step: {i} loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
 
 import sys; sys.exit(0)
 
